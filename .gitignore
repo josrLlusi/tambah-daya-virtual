@@ -1,0 +1,25 @@
+# rahasia
+.env
+config.h
+secrets.toml
+*.key
+
+# dokumen pribadi: JANGAN diunggah ke GitHub
+docs/pribadi/
+*KTM*
+*CV*
+*Pakta*
+
+# data mentah lapangan (besar / mungkin sensitif)
+data/raw/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# build / editor
+build/
+.vscode/
+.DS_Store
