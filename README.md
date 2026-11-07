@@ -21,19 +21,60 @@ Pembeda dari produk smart panel di luar negeri: satu sensor di panel yang sudah 
 |---|---|
 | `docs/` | proposal (Word dan PDF), diagram blok, grafik simulasi |
 | `sim/` | simulasi MCB dan kendali, pembuat data contoh |
-| `firmware/esp32_panel/` | kerangka firmware ESP32 (belum diuji) |
+| `firmware/esp32_panel/` | kerangka firmware ESP32: P, Q, model termal MCB, relay (belum diuji) |
+| `alat/` | perekam serial ESP32 ke CSV |
+| `analisis/` | deteksi event, klasifikasi alat, disagregasi, model MCB, dataset publik, data sintetis |
 | `dashboard/` | dasbor Streamlit dan fungsi hitung |
 | `data/` | skema data dan data contoh simulasi |
+| `docs/protokol_uji.md` | langkah rekam alat, uji trip MCB, uji kendali |
+| `docs/logbook.md` | templat logbook eksperimen |
 
 ## Mulai cepat
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r dashboard/requirements.txt
+pip install -r requirements.txt
 python sim/simulasi_mcb.py           # membuat data contoh dan grafik
 streamlit run dashboard/app.py       # membuka dasbor
 ```
+
+## Alur kerja NILM dan model MCB
+
+Coba seluruh alur dengan data sintetis (tanpa perangkat keras):
+
+```bash
+python analisis/data_sintetis.py --jam 6 --keluaran data/sample/agregat_sintetis.csv
+python analisis/deteksi_event.py data/sample/agregat_sintetis.csv --keluaran data/olah/event_agregat.csv
+python analisis/latih_klasifikasi.py data/olah/event_agregat.csv --kebenaran data/sample/agregat_sintetis_event.csv --keluaran laporan/klasifikasi_sintetis
+python analisis/data_sintetis.py --jam 6 --seed 9 --keluaran data/sample/agregat_uji.csv
+python analisis/disagregasi.py data/sample/agregat_uji.csv laporan/klasifikasi_sintetis/model.joblib
+```
+
+Dengan data nyata (lihat `docs/protokol_uji.md`):
+
+```bash
+# rekam tiap alat sendirian, deteksi event berlabel, latih
+python alat/perekam_serial.py --port COM5 --sesi setrika_uap --durasi 900
+python analisis/deteksi_event.py data/raw/setrika_uap_*.csv --label setrika_uap --keluaran data/olah/ev_setrika_uap.csv
+python analisis/latih_klasifikasi.py data/olah/ev_*.csv --keluaran laporan/klasifikasi_v1
+
+# parameter model termal MCB dari uji waktu trip
+python analisis/fit_mcb.py data/raw/uji_trip_mcb4A.csv --in-mcb 4 --keluaran laporan/mcb4A
+
+# (opsional) event dari dataset publik UK-DALE / REDD untuk pra-latih atau uji kode
+python analisis/dataset_publik.py --folder PATH/ukdale/house_1 --daftar
+```
+
+Model klasifikasi yang dibandingkan: pohon keputusan (mudah dijelaskan), random forest, dan jaringan saraf
+kecil (MLP). Fitur saat ini: perubahan daya aktif dan reaktif, rasionya, dan lonjakan arus saat start.
+Model jaringan saraf konvolusi (CNN 1D) pada bentuk gelombang belum dibuat; itu butuh data berfrekuensi
+tinggi dari ESP32 dan pustaka seperti PyTorch atau TensorFlow.
+
+Hasil pada data sintetis (hanya untuk menguji kode, bukan kinerja alat): deteksi event menangkap sekitar
+96% event tanpa event palsu; status alat besar (setrika, oven, mixer) terlacak 95-99% dari waktu,
+sedangkan alat kecil yang sering menyala (lampu/kipas, freezer) 68-95%. Alat kecil yang berubah status
+bersamaan dengan alat besar adalah bagian tersulit.
 
 ## Batas simulasi
 
@@ -44,8 +85,9 @@ streamlit run dashboard/app.py       # membuka dasbor
 ## Yang harus dikerjakan berikutnya
 
 - [ ] Rakit panel uji di laboratorium (MCB kecil, relay, sensor, RCBO, beban uji)
-- [ ] Ukur waktu trip MCB pada beberapa tingkat arus; fit model termal
-- [ ] Pra-latih model NILM dengan UK-DALE dan REDD (normalisasi 220 V/50 Hz); rekam alat UMKM lokal
+- [ ] Ukur waktu trip MCB pada 4-6 tingkat arus; jalankan `analisis/fit_mcb.py`
+- [ ] Rekam 5-8 alat, masing-masing 10x nyala-mati; latih `analisis/latih_klasifikasi.py`
+- [ ] Rekam kombinasi alat dan uji `analisis/disagregasi.py`
 - [ ] Uji kendali: relay dan sakelar pindah dengan inverter dan baterai
 - [ ] Ukur: jumlah MCB turun sebelum dan sesudah kendali; akurasi pengenalan alat
 - [ ] Hubungkan firmware ke basis data; ganti sumber data dasbor
