@@ -29,7 +29,7 @@ Pembeda dari produk smart panel di luar negeri: satu sensor di panel yang sudah 
 | `uji_semua.py` | menguji seluruh alur dengan satu perintah |
 | `alat/` | perekam serial ESP32 ke CSV |
 | `analisis/` | deteksi event, klasifikasi alat, disagregasi, model MCB, dataset publik, data sintetis |
-| `dashboard/` | dasbor Streamlit dan fungsi hitung |
+| `dashboard/` | dasbor Streamlit: halaman utama, `simulator.py`, `tampilan.py`, `logika.py` (fungsi hitung), `pages/` (halaman rekaman) |
 | `data/` | skema data dan data contoh simulasi |
 | `docs/protokol_uji.md` | langkah rekam alat, uji trip MCB, uji kendali |
 | `docs/logbook.md` | templat logbook eksperimen |
@@ -50,25 +50,30 @@ streamlit run dashboard/app.py       # membuka dasbor
 python uji_semua.py
 ```
 
-Perintah ini menjalankan sebelas langkah (simulasi, data sintetis, deteksi event, klasifikasi, disagregasi,
-model MCB, perekam mode uji, fungsi dasbor, logika firmware) dan mencetak LULUS atau GAGAL per langkah.
+Perintah ini menjalankan dua belas langkah (simulasi, data sintetis, deteksi event, klasifikasi, disagregasi,
+model MCB, perekam mode uji, fungsi dasbor, logika firmware, kecocokan antar-halaman dasbor) dan mencetak LULUS atau GAGAL per langkah.
 Berkas di repositori tidak diubah. Langkah logika firmware dilewati bila `g++` tidak terpasang.
 Semua datanya sintetis: uji ini membuktikan kode berjalan, bukan kinerja alat.
 
 ## Dasbor
 
-`streamlit run dashboard/app.py`, lalu pilih sumber data di sisi kiri:
+```bash
+python sim/rekaman_tiruan.py         # sekali saja: data tiruan untuk halaman kedua
+streamlit run dashboard/app.py
+```
 
-- **Contoh simulasi**: dua skenario (tanpa dan dengan kendali), atau rekaman tiruan berformat perangkat.
-  Buat rekaman tiruan dengan `python sim/rekaman_tiruan.py`.
-- **Rekaman di data/raw**: hasil `alat/perekam_serial.py`. Centang "Segarkan otomatis" untuk melihat data
-  yang sedang direkam.
-- **Unggah CSV**.
+Dasbor punya dua halaman (pilih di menu kiri):
 
-Untuk rekaman, dasbor menampilkan arus terhadap batas MCB, pemanasan MCB menurut model, perkiraan waktu sebelum
-MCB turun, alat yang dikenali menyala (bila sudah ada `laporan/<nama>/model.joblib`), log aksi kendali, dan ringkasan.
-**Mode demo** memutar ulang data dari awal untuk presentasi tanpa perangkat keras.
-Dasbor belum pernah dicoba di Streamlit asli oleh pembuat kodenya; bila ada galat, catat pesan galatnya.
+1. **Halaman utama** (`dashboard/app.py`): data dua skenario (tanpa dan dengan kendali) dari simulasi atau
+   CSV yang diunggah. Tab: putar ulang panel (mode demo), grafik arus dan MCB, alat dan kendali,
+   simulator apa-jika, validasi, data, dan tentang sistem.
+2. **Rekaman dan Pengenalan Alat** (`dashboard/pages/`): membaca rekaman ESP32 di `data/raw` (hasil
+   `alat/perekam_serial.py`, bisa disegarkan otomatis saat merekam), rekaman tiruan, atau CSV yang diunggah.
+   Menampilkan arus terhadap batas MCB, pemanasan MCB menurut model, perkiraan waktu sebelum MCB turun,
+   alat yang dikenali menyala (bila sudah ada `laporan/<nama>/model.joblib`), log aksi, dan ringkasan.
+   Bisa diputar ulang dari awal. Parameter MCB dibaca dari hasil `analisis/fit_mcb.py` bila ada.
+
+Semua data contoh adalah simulasi dan ditandai begitu di dasbor.
 
 ## Alur kerja NILM dan model MCB
 

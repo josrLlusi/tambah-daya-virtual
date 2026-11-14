@@ -188,6 +188,34 @@ def main():
         perlu(r.returncode == 0, r.stdout.strip().splitlines()[-1] if r.stdout.strip() else "uji gagal")
         return r.stdout.strip().splitlines()[-2]
 
+    @langkah("12. Halaman dasbor saling cocok (impor antar-berkas, tanpa menjalankan Streamlit)")
+    def _():
+        import ast
+        folder = AKAR / "dashboard"
+        modul = {}
+        for f in ["logika.py", "simulator.py", "tampilan.py"]:
+            if (folder / f).exists():
+                t = ast.parse((folder / f).read_text(encoding="utf-8"))
+                nama = set()
+                for n in t.body:
+                    if isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+                        nama.add(n.name)
+                    elif isinstance(n, ast.Assign):
+                        for x in n.targets:
+                            for y in (x.elts if isinstance(x, ast.Tuple) else [x]):
+                                if isinstance(y, ast.Name):
+                                    nama.add(y.id)
+                modul[f[:-3]] = nama
+        halaman = [folder / "app.py"] + sorted((folder / "pages").glob("*.py"))
+        hilang = []
+        for h in halaman:
+            t = ast.parse(h.read_text(encoding="utf-8"))
+            for n in ast.walk(t):
+                if isinstance(n, ast.ImportFrom) and n.module in modul:
+                    hilang += [f"{h.name}: {n.module}.{x.name}" for x in n.names if x.name not in modul[n.module]]
+        perlu(not hilang, "nama tidak ditemukan: " + ", ".join(hilang))
+        return f"{len(halaman)} halaman, semua impor ditemukan"
+
     n_gagal = sum(1 for h in hasil if h[1] == "GAGAL")
     print(f"\n{sum(1 for h in hasil if h[1] == 'LULUS')} lulus, {n_gagal} gagal, "
           f"{sum(1 for h in hasil if h[1] == 'DILEWATI')} dilewati, {sum(h[3] for h in hasil):.0f} detik.")
