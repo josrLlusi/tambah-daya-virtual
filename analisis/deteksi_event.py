@@ -8,6 +8,7 @@ rata-rata 'sebelum' dan 'sesudah' (kondisi tunak). Event yang berdekatan digabun
 --label dipakai saat merekam satu alat saja (semua event diberi label alat itu).
 """
 import argparse
+import glob
 from pathlib import Path
 
 import numpy as np
@@ -19,9 +20,42 @@ JENDELA = 5          # sampel untuk rata-rata tunak sebelum/sesudah
 JARAK_MIN = 5        # sampel minimum antar event
 
 
+def perluas(paths):
+    """Perluas pola seperti data/raw/setrika_*.csv. PowerShell dan CMD di Windows tidak
+    memperluas tanda * sendiri, jadi dilakukan di sini agar perintah sama di semua sistem."""
+    hasil = []
+    for p in paths:
+        cocok = sorted(glob.glob(str(p))) if any(c in str(p) for c in "*?[") else [str(p)]
+        if not cocok:
+            raise SystemExit(f"Tidak ada berkas yang cocok dengan pola: {p}")
+        hasil += cocok
+    return hasil
+
+
+def seragamkan_1detik(df):
+    """Rekaman ESP32 berisi beberapa baris per detik; analisis memakai langkah 1 detik.
+    Bila selang median < 0,9 detik, data dirata-rata per detik. Detik kosong (jeda antar rekaman) dibuang."""
+    if len(df) < 3:
+        return df
+    selang = df["waktu"].diff().dt.total_seconds().median()
+    if not selang or selang >= 0.9:
+        return df
+    angka = [k for k in df.columns if k != "waktu" and pd.api.types.is_numeric_dtype(df[k])]
+    lain = [k for k in df.columns if k != "waktu" and k not in angka]
+    cara = {k: "mean" for k in angka}
+    cara.update({k: "first" for k in lain})
+    for k in ("baterai_aktif", "mcb_trip"):
+        if k in cara:
+            cara[k] = "max"
+    d = df.set_index("waktu").resample("1s").agg(cara)
+    d = d.dropna(subset=["daya_aktif"]).reset_index()
+    return d[list(df.columns)]
+
+
 def muat(paths):
-    bag = [pd.read_csv(p, parse_dates=["waktu"]) for p in paths]
-    return pd.concat(bag, ignore_index=True).sort_values("waktu").reset_index(drop=True)
+    bag = [pd.read_csv(p, parse_dates=["waktu"]) for p in perluas(paths)]
+    df = pd.concat(bag, ignore_index=True).sort_values("waktu").reset_index(drop=True)
+    return seragamkan_1detik(df)
 
 
 def deteksi(df, ambang=AMBANG_W, jendela=JENDELA, jarak_min=JARAK_MIN, faktor_derau=6.0):

@@ -14,6 +14,7 @@ Evaluasi: validasi silang bertingkat (stratified k-fold). Keluaran: laporan.md, 
 """
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import joblib
@@ -26,6 +27,9 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deteksi_event import perluas  # noqa: E402
 
 
 def fitur(ev):
@@ -81,7 +85,7 @@ def main():
     ap.add_argument("--fold", type=int, default=5)
     a = ap.parse_args()
 
-    ev = pd.concat([pd.read_csv(p, parse_dates=["waktu"]) for p in a.berkas], ignore_index=True)
+    ev = pd.concat([pd.read_csv(p, parse_dates=["waktu"]) for p in perluas(a.berkas)], ignore_index=True)
     if a.kebenaran:
         ev = label_dari_kebenaran(ev, a.kebenaran)
     if "alat" not in ev:

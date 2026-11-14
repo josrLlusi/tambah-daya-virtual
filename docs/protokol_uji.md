@@ -5,7 +5,9 @@ Tidak ada uji yang menyentuh MCB pembatas PLN.
 
 ## A. Persiapan
 
-- [ ] Panel uji dirakit: MCB uji, RCBO, sensor arus dan tegangan di jalur PLN, stopkontak beban, relay dan sakelar pindah
+- [ ] `python uji_semua.py` lulus di laptop yang dipakai merekam
+- [ ] Panel uji dirakit menurut `docs/pengkabelan.md`: MCB uji, RCBO, sensor arus dan tegangan di jalur PLN, stopkontak beban, relay
+- [ ] Uji kering relay lulus (`firmware/uji_relay`, tanpa 220 V), lalu panel diperiksa dosen atau teknisi laboratorium
 - [ ] Kalibrasi tegangan dan arus terhadap multimeter atau power meter (catat KAL_V, KAL_I)
 - [ ] Daftar alat uji beserta nameplate (foto ke `docs/`); pilih 5-8 alat dengan daya berbeda
 - [ ] Cek sakelar pindah: keluaran inverter tidak pernah tersambung ke jalur PLN (uji dengan multimeter, tanpa beban)
@@ -26,6 +28,8 @@ Ulangi untuk semua alat, lalu latih:
 python analisis/latih_klasifikasi.py data/olah/ev_*.csv --keluaran laporan/klasifikasi_v1
 ```
 
+Perintah dengan tanda `*` berjalan sama di PowerShell, CMD, dan terminal Linux/Mac.
+
 ## C. Rekam kombinasi (untuk menguji disagregasi)
 
 Nyalakan beberapa alat bersamaan dan bergantian selama 30-60 menit. Catat urutan dan jam nyala-mati
@@ -39,7 +43,7 @@ python analisis/disagregasi.py data/raw/kombinasi_1_*.csv laporan/klasifikasi_v1
 ## D. Uji waktu trip MCB (untuk model termal)
 
 Pakai beban **resistif** (pemanas, setrika, lampu pijar) agar arus stabil.
-Uji 4-6 tingkat arus antara 1,2 dan 3 x arus nominal MCB (contoh MCB 4 A: 5, 6, 7, 9, 11 A).
+Uji 4-6 tingkat arus antara 1,2 dan 3 x arus nominal MCB (contoh MCB 4 A: 5, 6, 7, 9, 11 A; MCB 2 A: 2,5; 3; 3,5; 4,5; 5,5 A).
 Jangan uji di atas sekitar 4-5 x arus nominal: itu wilayah trip magnetik (seketika), bukan termal.
 
 1. MCB dingin (istirahat minimal 20 menit sejak trip terakhir).
@@ -57,7 +61,8 @@ arus_A,waktu_trip_detik,theta_awal
 python analisis/fit_mcb.py data/raw/uji_trip_mcb4A.csv --in-mcb 4 --keluaran laporan/mcb4A
 ```
 
-Salin `tau_detik` dan `theta_trip` dari `parameter_mcb.json` ke firmware.
+Salin `tau_detik` dan `theta_trip` dari `parameter_mcb.json` ke firmware (`TAU_DETIK`, `THETA_TRIP`).
+Dasbor membaca berkas itu sendiri untuk rekaman di `data/raw`.
 
 ## E. Uji kendali "MCB tidak turun"
 

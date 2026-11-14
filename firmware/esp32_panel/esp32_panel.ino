@@ -7,11 +7,26 @@
  * Keluaran serial (untuk alat/perekam_serial.py), satu baris per jendela ukur (~0,3 detik):
  *   DATA,tegangan,arus,daya_aktif,faktor_daya,daya_reaktif,theta,baterai_aktif
  *
+ * PENGKABELAN RELAY (lihat docs/pengkabelan.md):
+ *  - Relay PINDAH (kontak tukar/SPDT, dua kutub: fasa dan netral):
+ *      COM -> alat, NC -> jalur PLN, NO -> keluaran relay INVERTER.
+ *    Koil mati = alat di PLN. Kontak tukar tidak bisa menyambung NC dan NO bersamaan.
+ *  - Relay INVERTER (kontak NO, dua kutub): menyambung keluaran inverter ke terminal NO relay PINDAH.
+ *    Koil mati = inverter terlepas.
+ *  - Jadi bila ESP32 mati atau macet: kedua koil mati -> alat di PLN, inverter terlepas (fail-safe).
+ *
  * ATURAN KESELAMATAN (jangan dilonggarkan):
- *  - Relay dipasang NORMALLY CLOSED ke jalur PLN: bila ESP32 mati, alat tetap tersambung ke PLN.
  *  - Pindah PLN <-> inverter harus BREAK-BEFORE-MAKE: putus dulu, tunggu JEDA_PINDAH_MS, baru sambung.
  *    Keluaran inverter TIDAK BOLEH tersambung ke jaringan PLN walau sesaat.
- *  - Jeda minimum antar perpindahan (MIN_JEDA_AKSI_MS) agar motor/kompresor tidak hidup-mati berulang.
+ *  - RELAY_AKTIF_LOW harus sesuai modul relay yang dipakai. Disarankan modul "high level trigger"
+ *    (jumper di posisi H) dan RELAY_AKTIF_LOW = false: bila ESP32 kehilangan daya, pin menjadi 0 V
+ *    dan koil mati. Pada modul "low level trigger", pin 0 V justru MENGHIDUPKAN koil.
+ *  - Uji dulu TANPA tegangan 220 V: saat ESP32 menyala normal dan saat kabel USB ESP32 dicabut,
+ *    kedua relay harus dalam keadaan koil mati (lampu modul padam).
+ *  - Alat yang dipindah akan mati sekitar 0,2 detik saat berpindah. Pilih alat yang tahan terhadap itu
+ *    (pemanas, setrika, lampu). JANGAN memilih kompresor (kulkas, freezer, AC): kompresor yang dihidupkan
+ *    kembali seketika dapat macet dan rusak.
+ *  - Setelah pindah, alat ditahan minimal MIN_JEDA_AKSI_MS di baterai agar tidak berpindah bolak-balik.
  *  - Kode ini TIDAK menyentuh MCB pembatas PLN di meteran (disegel, milik PLN).
  *  - Pakai RCBO pada panel uji; uji pertama di laboratorium dengan pendampingan dosen.
  *
@@ -22,22 +37,27 @@
 
 const int PIN_I = 34;                 // ADC1, sensor arus total di jalur PLN (setelah MCB, sebelum percabangan)
 const int PIN_V = 35;                 // ADC1, sensor tegangan
-const int PIN_RELAY_PLN = 25;         // kontak alat yang dipindah: jalur PLN
-const int PIN_RELAY_INV = 26;         // kontak alat yang dipindah: jalur inverter
+const int PIN_RELAY_PINDAH = 25;      // relay kontak tukar: koil mati = alat di PLN, koil hidup = alat lepas dari PLN
+const int PIN_RELAY_INV = 26;         // relay inverter: koil hidup = inverter tersambung ke sisi NO relay pindah
+const bool RELAY_AKTIF_LOW = false;   // false: modul relay aktif saat pin HIGH (jumper modul di posisi H, disarankan)
+                                      // true : modul relay aktif saat pin LOW
 const int N_SAMPEL = 2000;
 
-const float IN_MCB = 4.0f;            // arus nominal MCB panel uji [A]
+const float IN_MCB = 4.0f;            // arus nominal MCB panel uji [A]; ubah bila memakai MCB 2 A
 float TAU_DETIK = 1200.0f;            // TODO dari parameter_mcb.json
 float THETA_TRIP = 1.6f;              // TODO dari parameter_mcb.json
 const float MARGIN = 0.80f;           // bertindak saat theta mencapai 80% ambang trip
 const float THETA_LEPAS = 1.0f;       // kembali ke PLN bila di bawah ini (dan beban lain turun)
 const unsigned long JEDA_PINDAH_MS = 200;
-const unsigned long MIN_JEDA_AKSI_MS = 180000UL;   // 3 menit
+const unsigned long MIN_JEDA_AKSI_MS = 180000UL;   // alat minimal 3 menit di baterai sebelum boleh kembali ke PLN
+const unsigned long MIN_JEDA_LINDUNG_MS = 10000UL; // jeda minimal sebelum aksi pelindung (pindah/tunda) berikutnya
+const bool PAKAI_BATERAI = true;      // true: alat dipindah ke inverter; false: alat hanya ditunda (diputus sementara)
 float KAL_V = 1.0f;                   // TODO kalibrasi: volt per unit ADC
 float KAL_I = 1.0f;                   // TODO kalibrasi: ampere per unit ADC
 
 float theta = 0.0f;                   // pemanasan model termal (relatif); 0 = MCB dingin saat ESP32 menyala
-bool diBaterai = false;
+bool diBaterai = false;               // true = alat sedang lepas dari PLN (di baterai, atau ditunda)
+bool pernahAksi = false;
 unsigned long terakhirAksi = 0, terakhirHitung = 0;
 
 struct Ukur { float vrms, irms, p, q, pf; };
@@ -62,18 +82,25 @@ Ukur baca() {
   return u;
 }
 
+// koil = true -> koil relay diberi arus; koil = false -> koil mati (keadaan aman)
+void setKoil(int pin, bool koil) {
+  digitalWrite(pin, (koil != RELAY_AKTIF_LOW) ? HIGH : LOW);
+}
+
 void keBaterai() {
-  digitalWrite(PIN_RELAY_PLN, LOW);   // putus dulu (break)
-  delay(JEDA_PINDAH_MS);
-  digitalWrite(PIN_RELAY_INV, HIGH);  // baru sambung (make)
+  setKoil(PIN_RELAY_PINDAH, true);    // putus dari PLN dulu (break)
+  if (PAKAI_BATERAI) {
+    delay(JEDA_PINDAH_MS);
+    setKoil(PIN_RELAY_INV, true);     // baru sambung inverter (make)
+  }
   diBaterai = true;
-  Serial.println("AKSI,pindah_ke_baterai");
+  Serial.println(PAKAI_BATERAI ? "AKSI,pindah_ke_baterai" : "AKSI,tunda_alat");
 }
 
 void keJalurPLN() {
-  digitalWrite(PIN_RELAY_INV, LOW);
+  setKoil(PIN_RELAY_INV, false);      // lepas inverter dulu
   delay(JEDA_PINDAH_MS);
-  digitalWrite(PIN_RELAY_PLN, HIGH);
+  setKoil(PIN_RELAY_PINDAH, false);   // baru kembali ke PLN
   diBaterai = false;
   Serial.println("AKSI,kembali_ke_pln");
 }
@@ -81,10 +108,10 @@ void keJalurPLN() {
 void setup() {
   Serial.begin(115200);
   analogReadResolution(12);
-  pinMode(PIN_RELAY_PLN, OUTPUT);
   pinMode(PIN_RELAY_INV, OUTPUT);
-  digitalWrite(PIN_RELAY_INV, LOW);
-  digitalWrite(PIN_RELAY_PLN, HIGH);  // keadaan awal: semua dari PLN
+  setKoil(PIN_RELAY_INV, false);      // keadaan awal: inverter terlepas
+  pinMode(PIN_RELAY_PINDAH, OUTPUT);
+  setKoil(PIN_RELAY_PINDAH, false);   // keadaan awal: semua dari PLN
   terakhirHitung = millis();
 }
 
@@ -97,9 +124,14 @@ void loop() {
   float r = u.irms / IN_MCB;
   theta += dt * (r * r - theta) / TAU_DETIK;
 
-  bool boleh = (now - terakhirAksi) >= MIN_JEDA_AKSI_MS;
-  if (!diBaterai && theta > MARGIN * THETA_TRIP && boleh) { keBaterai(); terakhirAksi = now; }
-  else if (diBaterai && theta < THETA_LEPAS && boleh) { keJalurPLN(); terakhirAksi = now; }
+  // Aksi pelindung (lepas dari PLN) tidak boleh tertahan lama: MCB turun lebih merugikan.
+  // Kembali ke PLN ditahan minimal MIN_JEDA_AKSI_MS agar alat tidak berpindah bolak-balik.
+  unsigned long sejak = now - terakhirAksi;
+  if (!diBaterai && theta > MARGIN * THETA_TRIP && (!pernahAksi || sejak >= MIN_JEDA_LINDUNG_MS)) {
+    keBaterai(); terakhirAksi = millis(); pernahAksi = true;
+  } else if (diBaterai && theta < THETA_LEPAS && sejak >= MIN_JEDA_AKSI_MS) {
+    keJalurPLN(); terakhirAksi = millis(); pernahAksi = true;
+  }
 
   Serial.printf("DATA,%.1f,%.3f,%.1f,%.3f,%.1f,%.4f,%d\n", u.vrms, u.irms, u.p, u.pf, u.q, theta, diBaterai);
 }

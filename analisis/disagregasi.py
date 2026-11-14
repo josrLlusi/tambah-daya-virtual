@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from deteksi_event import deteksi  # noqa: E402
+from deteksi_event import deteksi, muat  # noqa: E402
 from latih_klasifikasi import fitur  # noqa: E402
 
 
@@ -58,6 +58,12 @@ def lacak(df, ev, paket, periode_koreksi=30, ambang_relatif=0.6):
                     k = min(mati, key=lambda k: abs(tipikal.get(k, 0) - sisa))
                     if sisa > ambang_relatif * tipikal.get(k, 0) and abs(tipikal.get(k, 0) - sisa) < 0.4 * tipikal.get(k, 0):
                         aktif.add(k)
+                    else:
+                        # tidak ada satu alat yang pas: mungkin beberapa alat kecil terlewat. Nyalakan alat
+                        # terbesar yang masih muat di selisih daya; sisanya dikoreksi pada putaran berikutnya.
+                        muat_ = [k for k in mati if 0 < tipikal.get(k, 0) <= 1.15 * sisa]
+                        if muat_:
+                            aktif.add(max(muat_, key=lambda k: tipikal.get(k, 0)))
         for k in aktif:
             status[k][j] = True
     return ev, status
@@ -69,7 +75,7 @@ def main():
     ap.add_argument("model")
     ap.add_argument("--keluaran", default="hasil/disagregasi.csv")
     a = ap.parse_args()
-    df = pd.read_csv(a.csv, parse_dates=["waktu"]).sort_values("waktu").reset_index(drop=True)
+    df = muat([a.csv])
     paket = joblib.load(a.model)
     ev = deteksi(df)
     ev, status = lacak(df, ev, paket)

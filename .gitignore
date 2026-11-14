@@ -27,3 +27,11 @@ build/
 # hasil olahan lokal
 data/olah/
 hasil/
+
+# keluaran uji dan data contoh yang bisa dibuat ulang
+uji_keluaran/
+data/sample/agregat_*.csv
+data/sample/rekaman_tiruan.csv
+*.joblib
+firmware/uji_host/uji_logika
+firmware/uji_host/*.exe

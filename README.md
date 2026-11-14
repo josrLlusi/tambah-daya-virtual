@@ -4,7 +4,7 @@ Sistem pengenalan beban non-intrusif (NILM) dan kendali cerdas beban dan baterai
 
 Proyek untuk UNS Innovation Hackathon 2026, Sub-tema A (energi terbarukan dan penyimpanan untuk fasilitas publik dan UMKM).
 
-> **Status: tahap konsep, TKT 3.** Yang ada saat ini adalah simulasi, kerangka firmware yang belum diuji di perangkat keras, dan dasbor yang membaca data simulasi. Belum ada hasil pengukuran. Jangan mengutip angka dari repositori ini sebagai kinerja alat.
+> **Status: tahap konsep, TKT 3.** Yang ada saat ini adalah simulasi, alur analisis yang diuji pada data sintetis, firmware yang logikanya diuji di komputer tetapi belum pernah dijalankan di ESP32, dan dasbor yang belum pernah dicoba dengan data perangkat. Belum ada hasil pengukuran. Jangan mengutip angka dari repositori ini sebagai kinerja alat.
 
 ## Cara kerja singkat
 
@@ -20,8 +20,13 @@ Pembeda dari produk smart panel di luar negeri: satu sensor di panel yang sudah 
 | Folder | Isi |
 |---|---|
 | `docs/` | proposal (Word dan PDF), diagram blok, grafik simulasi |
-| `sim/` | simulasi MCB dan kendali, pembuat data contoh |
-| `firmware/esp32_panel/` | kerangka firmware ESP32: P, Q, model termal MCB, relay (belum diuji) |
+| `docs/daftar_komponen.md` | komponen panel uji dan harga acuan |
+| `docs/pengkabelan.md` | pengkabelan panel uji, uji kering relay, langkah pertama kali diberi tegangan |
+| `sim/` | simulasi MCB dan kendali, pembuat data contoh, rekaman tiruan untuk demo |
+| `firmware/esp32_panel/` | firmware ESP32: P, Q, model termal MCB, relay (belum dijalankan di ESP32) |
+| `firmware/uji_relay/` | sketsa uji kering relay, dijalankan tanpa 220 V |
+| `firmware/uji_host/` | uji logika firmware di komputer (butuh g++) |
+| `uji_semua.py` | menguji seluruh alur dengan satu perintah |
 | `alat/` | perekam serial ESP32 ke CSV |
 | `analisis/` | deteksi event, klasifikasi alat, disagregasi, model MCB, dataset publik, data sintetis |
 | `dashboard/` | dasbor Streamlit dan fungsi hitung |
@@ -38,6 +43,32 @@ pip install -r requirements.txt
 python sim/simulasi_mcb.py           # membuat data contoh dan grafik
 streamlit run dashboard/app.py       # membuka dasbor
 ```
+
+## Menguji semua kode
+
+```bash
+python uji_semua.py
+```
+
+Perintah ini menjalankan sebelas langkah (simulasi, data sintetis, deteksi event, klasifikasi, disagregasi,
+model MCB, perekam mode uji, fungsi dasbor, logika firmware) dan mencetak LULUS atau GAGAL per langkah.
+Berkas di repositori tidak diubah. Langkah logika firmware dilewati bila `g++` tidak terpasang.
+Semua datanya sintetis: uji ini membuktikan kode berjalan, bukan kinerja alat.
+
+## Dasbor
+
+`streamlit run dashboard/app.py`, lalu pilih sumber data di sisi kiri:
+
+- **Contoh simulasi**: dua skenario (tanpa dan dengan kendali), atau rekaman tiruan berformat perangkat.
+  Buat rekaman tiruan dengan `python sim/rekaman_tiruan.py`.
+- **Rekaman di data/raw**: hasil `alat/perekam_serial.py`. Centang "Segarkan otomatis" untuk melihat data
+  yang sedang direkam.
+- **Unggah CSV**.
+
+Untuk rekaman, dasbor menampilkan arus terhadap batas MCB, pemanasan MCB menurut model, perkiraan waktu sebelum
+MCB turun, alat yang dikenali menyala (bila sudah ada `laporan/<nama>/model.joblib`), log aksi kendali, dan ringkasan.
+**Mode demo** memutar ulang data dari awal untuk presentasi tanpa perangkat keras.
+Dasbor belum pernah dicoba di Streamlit asli oleh pembuat kodenya; bila ada galat, catat pesan galatnya.
 
 ## Alur kerja NILM dan model MCB
 
@@ -72,9 +103,13 @@ Model jaringan saraf konvolusi (CNN 1D) pada bentuk gelombang belum dibuat; itu 
 tinggi dari ESP32 dan pustaka seperti PyTorch atau TensorFlow.
 
 Hasil pada data sintetis (hanya untuk menguji kode, bukan kinerja alat): deteksi event menangkap sekitar
-96% event tanpa event palsu; status alat besar (setrika, oven, mixer) terlacak 95-99% dari waktu,
-sedangkan alat kecil yang sering menyala (lampu/kipas, freezer) 68-95%. Alat kecil yang berubah status
+95% event; pada tiga data uji, status alat besar (setrika, oven, mixer) terlacak 95-100% dari waktu,
+sedangkan alat kecil (lampu/kipas, freezer, mesin jahit) 77-99%. Alat kecil yang berubah status
 bersamaan dengan alat besar adalah bagian tersulit.
+
+Pola berkas seperti `data/raw/setrika_uap_*.csv` diperluas oleh skrip sendiri, sehingga perintah di atas
+berjalan sama di PowerShell, CMD, dan terminal Linux/Mac. Rekaman ESP32 yang berisi beberapa baris per detik
+dirata-rata menjadi satu baris per detik sebelum dianalisis.
 
 ## Batas simulasi
 
@@ -84,18 +119,21 @@ bersamaan dengan alat besar adalah bagian tersulit.
 
 ## Yang harus dikerjakan berikutnya
 
-- [ ] Rakit panel uji di laboratorium (MCB kecil, relay, sensor, RCBO, beban uji)
+- [ ] Jalankan `python uji_semua.py` di laptop tiap anggota; coba dasbor dan mode demo di Streamlit
+- [ ] Beli komponen (`docs/daftar_komponen.md`); kompilasi firmware di Arduino IDE
+- [ ] Rakit panel uji di laboratorium (`docs/pengkabelan.md`); lakukan uji kering relay
 - [ ] Ukur waktu trip MCB pada 4-6 tingkat arus; jalankan `analisis/fit_mcb.py`
 - [ ] Rekam 5-8 alat, masing-masing 10x nyala-mati; latih `analisis/latih_klasifikasi.py`
 - [ ] Rekam kombinasi alat dan uji `analisis/disagregasi.py`
 - [ ] Uji kendali: relay dan sakelar pindah dengan inverter dan baterai
 - [ ] Ukur: jumlah MCB turun sebelum dan sesudah kendali; akurasi pengenalan alat
-- [ ] Hubungkan firmware ke basis data; ganti sumber data dasbor
-- [ ] Mode demo (putar ulang data rekaman) untuk presentasi
+- [ ] Sambungkan hasil pengenalan alat ke keputusan kendali (saat ini kendali hanya memakai model termal)
+- [ ] Pantau tegangan aki di firmware
+- [ ] Hubungkan firmware ke basis data (opsional; dasbor sudah bisa membaca rekaman di `data/raw`)
 
 ## Keselamatan
 
-Proyek ini memutus dan menyambung beban 220 V. Ikuti aturan di komentar `firmware/esp32_panel/esp32_panel.ino`: relay fail-safe ke PLN, sakelar pindah break-before-make, tidak menyentuh MCB pembatas PLN, RCBO di setiap panel uji, uji pertama di laboratorium dengan pendampingan dosen.
+Proyek ini memutus dan menyambung beban 220 V. Ikuti `docs/pengkabelan.md` dan aturan di komentar `firmware/esp32_panel/esp32_panel.ino`: relay fail-safe ke PLN, sakelar pindah putus-dulu-baru-sambung, keluaran inverter tidak pernah tersambung ke jaringan PLN, tidak menyentuh MCB pembatas PLN, RCBO di setiap panel uji, uji kering sebelum diberi tegangan, dan uji pertama di laboratorium dengan pendampingan dosen.
 
 ## Catatan orisinalitas
 

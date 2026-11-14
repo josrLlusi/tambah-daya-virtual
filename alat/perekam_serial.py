@@ -68,6 +68,8 @@ def main():
     a = ap.parse_args()
     if not a.uji and not a.port:
         ap.error("isi --port, atau pakai --uji untuk mencoba")
+    if a.uji:
+        a.perangkat = "tiruan"      # data palsu ditandai, supaya dasbor menampilkannya sebagai simulasi
 
     kolom = [k.strip() for k in a.kolom.split(",")]
     folder = Path(a.folder)

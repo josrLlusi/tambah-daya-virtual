@@ -12,6 +12,12 @@ Kolom yang sama dipakai CSV dan basis data (Supabase/PostgreSQL).
 | arus | angka | Irms total di jalur PLN (A) |
 | daya_aktif | angka | W |
 | faktor_daya | angka | 0 sampai 1 |
+| daya_reaktif | angka | var (besaran) |
+| theta | angka | pemanasan MCB menurut model termal di firmware (relatif) |
+| baterai_aktif | 0/1 | 1 = alat yang dapat dipindah sedang lepas dari PLN (di baterai atau ditunda) |
+
+Berkas rekaman `alat/perekam_serial.py` memakai kolom di atas, ditambah `sesi`. Firmware mengirim beberapa baris
+per detik; skrip analisis merata-ratakannya menjadi satu baris per detik.
 
 ## `hasil` (dari model)
 
@@ -35,6 +41,12 @@ Kolom yang sama dipakai CSV dan basis data (Supabase/PostgreSQL).
 
 Menggabungkan dua skenario dalam satu berkas agar dasbor mudah diuji: kolom `*_tanpa_kendali`
 dan `*_kendali`, `baterai_aktif`, `aksi`, `alat_aktif`, `mcb_trip_*`. Ini **bukan** format data perangkat.
+
+## Rekaman tiruan (`data/sample/rekaman_tiruan.csv`)
+
+Dibuat oleh `sim/rekaman_tiruan.py`. Formatnya sama dengan rekaman perangkat, dengan kolom tambahan `mcb_trip`,
+`alat_aktif` (alat yang terlihat di jalur PLN), dan `alat_di_baterai`. `id_perangkat` berisi `tiruan`.
+Ini **simulasi**, dipakai untuk mencoba dasbor dan mode demo.
 
 ## Aturan
 
