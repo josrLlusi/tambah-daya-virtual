@@ -144,6 +144,96 @@ def jalankan(jam=6, seed_latih=1, seed_uji=(9, 10, 11), in_mcb=10.0, tau=900.0, 
     return pd.DataFrame(baris)
 
 
+NAMA_SKENARIO = {"tanpa": "Tanpa kendali", "termal_1": "Termal saja (seperti firmware)",
+                 "nilm_1": "NILM, 1 kanal", "nilm_2": "NILM, 2 kanal"}
+
+# Warna grafik (lihat panduan dataviz): aksen untuk sistem yang diusulkan, abu-abu untuk pembanding (emphasis).
+PERMUKAAN, INK, INK2, MUTED, GRID, GARIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
+AKSEN, PEMBANDING = "#2a78d6", "#898781"
+
+
+def _batang_bulat(ax, y, nilai, warna, tebal_px, radius_px):
+    """Batang horizontal dari 0 sampai `nilai`: pangkal siku di garis dasar, ujung kanan membulat (radius_px).
+    Digambar dalam koordinat layar supaya radiusnya sama di semua panel; simpan gambar dengan dpi yang sama."""
+    from matplotlib.patches import PathPatch
+    from matplotlib.path import Path
+    from matplotlib.transforms import IdentityTransform
+    (x0, yc), (x1, _) = ax.transData.transform([(0, y), (nilai, y)])
+    if x1 - x0 < 1:
+        return                                   # nilai 0: tidak ada batang; nilainya tetap dilabeli
+    h = tebal_px / 2
+    r = min(radius_px, h, x1 - x0)
+    k = 0.5523 * r                               # pendekatan busur lingkaran dengan kurva Bezier
+    v = [(x0, yc - h), (x1 - r, yc - h), (x1 - r + k, yc - h), (x1, yc - h + r - k), (x1, yc - h + r),
+         (x1, yc + h - r), (x1, yc + h - r + k), (x1 - r + k, yc + h), (x1 - r, yc + h),
+         (x0, yc + h), (x0, yc - h)]
+    c = [Path.MOVETO, Path.LINETO, Path.CURVE4, Path.CURVE4, Path.CURVE4,
+         Path.LINETO, Path.CURVE4, Path.CURVE4, Path.CURVE4, Path.LINETO, Path.CLOSEPOLY]
+    ax.add_patch(PathPatch(Path(v, c), facecolor=warna, edgecolor="none", transform=IdentityTransform()))
+
+
+def gambar(benar, salah, path, salah_tau=0.6, jam=6, dpi=150):
+    """Gambar perbandingan strategi kendali (SIMULASI). benar/salah: keluaran jalankan() untuk tau sesuai tebakan dan
+    tau sebenarnya `salah_tau` x tebakan. Empat panel dengan skala masing-masing (bukan sumbu ganda)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    matplotlib.rcParams["font.family"] = ["Segoe UI", "DejaVu Sans"]
+    skala = dpi / 96.0                            # spesifikasi mark dalam px CSS -> piksel gambar
+    urut = list(NAMA_SKENARIO)
+    jml = lambda df, kol: [float(df.groupby("skenario")[kol].sum()[s]) for s in urut]  # noqa: E731
+    n_data = len(set(benar["seed"]))
+    panel = [
+        ("MCB turun (kali)", "parameter MCB sesuai tebakan", jml(benar, "mcb_turun"), (0, 55), "{:.0f}"),
+        ("MCB turun (kali)", f"MCB lebih cepat panas dari tebakan (tau sebenarnya {salah_tau:g}x)".replace(".", ","),
+         jml(salah, "mcb_turun"), (0, 55), "{:.0f}"),
+        ("Aksi pindah ke baterai (kali)", "parameter MCB sesuai tebakan", jml(benar, "aksi_pindah"), (0, 38), "{:.0f}"),
+        ("Energi dialihkan ke baterai (kWh)", "parameter MCB sesuai tebakan", jml(benar, "energi_baterai_kwh"),
+         (0, 9.6), "{:.1f}"),
+    ]
+    fig = plt.figure(figsize=(11, 6.6), dpi=dpi, facecolor=PERMUKAAN)
+    fig.subplots_adjust(left=0.215, right=0.975, top=0.755, bottom=0.115, hspace=0.62, wspace=0.07)
+    axs = fig.subplots(2, 2, sharey="row")
+    for ax, (judul, sub, nilai, xlim, f) in zip(axs.flat, panel):
+        ax.set_facecolor(PERMUKAAN)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(len(urut) - 0.5, -0.5)
+        ax.set_yticks(range(len(urut)), [NAMA_SKENARIO[s] for s in urut])
+        ax.tick_params(axis="y", length=0, labelsize=9.5, labelcolor=INK2, pad=8)
+        ax.tick_params(axis="x", length=0, labelsize=8.5, labelcolor=MUTED, pad=4)
+        ax.grid(axis="x", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        for nama, sp in ax.spines.items():
+            sp.set_visible(nama == "left")
+            sp.set_color(GARIS)
+        ax.set_title(judul, loc="left", fontsize=10.5, fontweight="bold", color=INK, pad=17)
+        ax.text(0, 1.045, sub, transform=ax.transAxes, fontsize=8.8, color=INK2, va="bottom")
+        if ax in axs[:, 1]:
+            ax.tick_params(axis="y", labelleft=False)
+    fig.canvas.draw()                              # tata letak final sebelum menggambar batang dalam koordinat layar
+    for ax, (_, _, nilai, xlim, f) in zip(axs.flat, panel):
+        for i, (s, v) in enumerate(zip(urut, nilai)):
+            _batang_bulat(ax, i, v, AKSEN if s.startswith("nilm") else PEMBANDING, 24 * skala * 0.62, 4 * skala)
+            ax.annotate(f.format(v).replace(".", ","), (v, i), xytext=(6, 0), textcoords="offset points", va="center",
+                        fontsize=9.5, fontweight="bold", color=INK)
+
+    fig.text(0.04, 0.945, "Perbandingan strategi kendali beban", fontsize=15, fontweight="bold", color=INK, va="center")
+    fig.text(0.965, 0.945, "SIMULASI", fontsize=10, fontweight="bold", color=INK2, ha="right", va="center",
+             bbox=dict(boxstyle="round,pad=0.45", facecolor=PERMUKAAN, edgecolor=INK2, linewidth=1.2))
+    fig.text(0.04, 0.895, f"Jumlah {n_data} data uji sintetis x {jam:g} jam. Parameter MCB, alat, dan inverter bersifat ILUSTRATIF; "
+             "ini bukan hasil pengukuran.", fontsize=9.3, color=INK2, va="center")
+    fig.legend(handles=[Patch(color=PEMBANDING, label="Pembanding"), Patch(color=AKSEN, label="Kendali berbasis NILM")],
+               loc="upper left", bbox_to_anchor=(0.04, 0.865), ncol=2, frameon=False, fontsize=9.3,
+               labelcolor=INK2, handlelength=1.0, handleheight=1.0, columnspacing=1.6, borderpad=0, borderaxespad=0)
+    fig.text(0.04, 0.035, "Sumber: sim/simulasi_nilm_kendali.py. Satu keluarga skenario sintetis; model NILM dilatih pada generator "
+             "yang sama dengan data ujinya (hasil nyata hampir pasti lebih buruk).", fontsize=8, color=MUTED, va="center")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi, facecolor=PERMUKAAN)
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--jam", type=float, default=6)
@@ -156,6 +246,8 @@ def main():
     ap.add_argument("--salah-tau", type=float, default=1.0,
                     help="tau sebenarnya = faktor ini x tau yang diketahui pengendali (mis. 0.6 = MCB lebih cepat panas)")
     ap.add_argument("--keluaran", default=None, help="simpan tabel hasil ke CSV")
+    ap.add_argument("--gambar", default=None, help="simpan gambar perbandingan (PNG); menjalankan juga skenario tau salah, sekitar 2x lebih lama")
+    ap.add_argument("--salah-tau-gambar", type=float, default=0.6, help="tau sebenarnya (x tebakan) pada panel kedua gambar")
     a = ap.parse_args()
     hasil = jalankan(a.jam, a.seed_latih, tuple(a.seed_uji), a.in_mcb, a.tau, a.theta_trip, a.inverter_va, a.salah_tau)
     pd.set_option("display.width", 200)
@@ -170,6 +262,13 @@ def main():
         Path(a.keluaran).parent.mkdir(parents=True, exist_ok=True)
         hasil.to_csv(a.keluaran, index=False)
         print(f"Tabel disimpan: {a.keluaran}")
+    if a.gambar:
+        benar = hasil if a.salah_tau == 1.0 else jalankan(a.jam, a.seed_latih, tuple(a.seed_uji), a.in_mcb, a.tau,
+                                                         a.theta_trip, a.inverter_va, 1.0)
+        salah = hasil if a.salah_tau == a.salah_tau_gambar else jalankan(a.jam, a.seed_latih, tuple(a.seed_uji), a.in_mcb,
+                                                                        a.tau, a.theta_trip, a.inverter_va, a.salah_tau_gambar)
+        gambar(benar, salah, a.gambar, a.salah_tau_gambar, a.jam)
+        print(f"Gambar disimpan: {a.gambar}")
 
 
 if __name__ == "__main__":

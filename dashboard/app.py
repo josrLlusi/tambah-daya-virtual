@@ -184,10 +184,11 @@ kartu_html = "".join([
     kartu("Arus puncak · dengan kendali", fmt(puncak_kendali), "A", s2, k2, "gauge"),
     kartu("MCB turun (trip)", f"{trip_tanpa} → {trip_kendali}", "kali",
           "tanpa kendali → dengan kendali", "ok" if trip_kendali == 0 else "bad", "shield"),
-    kartu("Tambahan daya efektif", fmt(td["tambahan_va"], 0), "VA",
-          "batal: masih ada trip dengan kendali" if td["ada_trip"]
+    kartu("Tambahan daya efektif", fmt(td["tambahan_va"], 0) if td["terverifikasi"] else "–", "VA",
+          "tidak dapat dihitung: " + td["alasan"] if not td["terverifikasi"]
+          else "batal: masih ada trip dengan kendali" if td["ada_trip"]
           else f"di atas daya terpasang {fmt(td['terpasang_va'], 0)} VA",
-          "bad" if td["ada_trip"] else "ok", "bolt"),
+          "warn" if not td["terverifikasi"] else "bad" if td["ada_trip"] else "ok", "bolt"),
     kartu("Energi dari baterai", fmt(energi, 2), "kWh",
           f"baterai aktif {fmt(durasi_bat, 0)} menit", "", "battery"),
 ])
@@ -603,8 +604,10 @@ with tab_validasi:
     rinci = pd.DataFrame({
         "Komponen": ["Daya terpasang (nominal MCB × tegangan)", "Beban puncak yang diminta (tanpa kendali)",
                      "Ada MCB turun dengan kendali?", "Tambahan daya efektif"],
-        "Nilai": [f"{fmt(td['terpasang_va'], 0)} VA", f"{fmt(td['beban_diminta_va'], 0)} VA",
-                  "Ya" if td["ada_trip"] else "Tidak", f"{fmt(td['tambahan_va'], 0)} VA"],
+        "Nilai": [f"{fmt(td['terpasang_va'], 0)} VA",
+                  f"{fmt(td['beban_diminta_va'], 0)} VA" if td["beban_diminta_va"] == td["beban_diminta_va"] else "–",
+                  "Tidak diketahui" if td["ada_trip"] is None else "Ya" if td["ada_trip"] else "Tidak",
+                  f"{fmt(td['tambahan_va'], 0)} VA" if td["terverifikasi"] else "tidak dapat dihitung"],
     })
     st.dataframe(rinci, hide_index=True, use_container_width=True)
 

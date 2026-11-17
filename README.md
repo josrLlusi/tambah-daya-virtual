@@ -161,6 +161,10 @@ jumlah dari 3 data uji masing-masing 6 jam; model NILM dilatih pada data lain):
 | NILM, 2 kanal (setrika dan oven) | 0 | 20 | 373 | 6,6 |
 | *bila tau sebenarnya 0,6x tebakan:* tanpa kendali / termal / NILM 1 kanal / NILM 2 kanal | 48 / 26 / 0 / 0 | | | |
 
+![Perbandingan strategi kendali beban, SIMULASI](docs/simulasi_kendali_nilm.png)
+
+Gambar di atas dibuat ulang dengan `python sim/simulasi_nilm_kendali.py --gambar docs/simulasi_kendali_nilm.png` (sekitar 5 menit). Semua angkanya simulasi.
+
 Cara membacanya, dengan jujur:
 - Bila parameter MCB diketahui benar, kendali termal saja **sudah mencegah MCB turun** pada skenario ini. NILM tidak
   menambah pencegahan, tetapi memindah **lebih jarang** (17 berbanding 29) karena tidak bolak-balik.

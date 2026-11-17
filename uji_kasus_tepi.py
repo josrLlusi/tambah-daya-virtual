@@ -371,6 +371,25 @@ def main():
         ok = lg.tambahan_daya_va(df_(arus_tanpa_kendali=[5, 30], mcb_trip_kendali=[0, 0]))
         perlu(abs(ok["tambahan_va"] - (30 * 220 - 20 * 220)) < 1e-6, str(ok))
 
+    @cek("tambahan_daya_va: kolom trip hilang -> TIDAK mengklaim tambahan daya (0 VA, tidak terverifikasi, ada alasan)")
+    def _():
+        r = lg.tambahan_daya_va(df_(arus_tanpa_kendali=[5, 30]))
+        perlu(r["tambahan_va"] == 0.0 and r["terverifikasi"] is False and r["ada_trip"] is None, str(r))
+        perlu("mcb_trip_kendali" in r["alasan"], r["alasan"])
+
+    @cek("tambahan_daya_va: data kosong atau kolom arus hilang -> tidak NaN, tidak error, tidak mengklaim")
+    def _():
+        for d in (df_(arus_tanpa_kendali=[], mcb_trip_kendali=[]), df_(mcb_trip_kendali=[0, 0])):
+            r = lg.tambahan_daya_va(d)
+            perlu(r["tambahan_va"] == 0.0 and r["terverifikasi"] is False and r["alasan"], str(r))
+
+    @cek("tambahan_daya_va: data lengkap tanpa trip = terverifikasi dengan angka; ada trip = terverifikasi dan 0")
+    def _():
+        ok = lg.tambahan_daya_va(df_(arus_tanpa_kendali=[5, 30], mcb_trip_kendali=[0, 0]))
+        perlu(ok["terverifikasi"] and ok["alasan"] == "" and ok["tambahan_va"] > 0, str(ok))
+        trip = lg.tambahan_daya_va(df_(arus_tanpa_kendali=[5, 30], mcb_trip_kendali=[0, 1]))
+        perlu(trip["terverifikasi"] and trip["ada_trip"] is True and trip["tambahan_va"] == 0.0, str(trip))
+
     @cek("segmen_alat: kosong, tanpa alat, dan 1 baris tidak membuat program berhenti")
     def _():
         perlu(len(lg.segmen_alat(df_(alat_aktif=[]))) == 0)

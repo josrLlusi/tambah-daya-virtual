@@ -76,13 +76,29 @@ def durasi_baterai_menit(df):
 
 def tambahan_daya_va(df, tegangan=TEGANGAN, kolom_tanpa="arus_tanpa_kendali", in_mcb=IN_MCB,
                      kolom_trip_kendali="mcb_trip_kendali"):
-    """Tambahan daya efektif (VA): beban puncak yang diminta melebihi daya terpasang MCB,
-    dihitung HANYA bila tidak ada MCB trip pada kondisi dengan kendali. Bila ada trip, hasilnya 0."""
+    """Tambahan daya efektif (VA): beban puncak yang diminta melebihi daya terpasang MCB.
+
+    Klaim ini HANYA diberikan bila bisa diverifikasi, karena angkanya dipakai sebagai klaim kinerja:
+      - kolom trip dengan kendali harus ada (tanpa kolom itu tidak diketahui apakah MCB turun),
+      - kolom arus tanpa kendali harus ada dan berisi angka,
+      - tidak boleh ada MCB turun pada kondisi dengan kendali.
+    Bila salah satu tidak terpenuhi, tambahan_va = 0.0 dan `alasan` menjelaskan; `terverifikasi` False hanya bila
+    datanya tidak cukup untuk menilai (bila ada trip dengan kendali, hasil 0 itu sendiri adalah penilaian yang sah).
+    ada_trip: True/False, atau None bila tidak dapat dinilai."""
     terpasang = in_mcb * tegangan
-    diminta = float(df[kolom_tanpa].max() * tegangan)
-    ada_trip = kejadian_trip(df, kolom_trip_kendali) > 0
+    puncak = df[kolom_tanpa].max() if kolom_tanpa in df.columns and len(df) else float("nan")
+    diminta = float(puncak * tegangan) if pd.notna(puncak) else float("nan")
+    if kolom_trip_kendali not in df.columns:
+        ada_trip, terverifikasi = None, False
+        alasan = f"kolom {kolom_trip_kendali} tidak ada: tidak diketahui apakah MCB turun dengan kendali"
+    elif pd.isna(diminta):
+        ada_trip, terverifikasi = kejadian_trip(df, kolom_trip_kendali) > 0, False
+        alasan = f"kolom {kolom_tanpa} tidak ada atau kosong: beban puncak tidak diketahui"
+    else:
+        ada_trip, terverifikasi, alasan = kejadian_trip(df, kolom_trip_kendali) > 0, True, ""
+    tambahan = max(diminta - terpasang, 0.0) if terverifikasi and not ada_trip else 0.0
     return dict(terpasang_va=terpasang, beban_diminta_va=diminta, ada_trip=ada_trip,
-                tambahan_va=0.0 if ada_trip else max(diminta - terpasang, 0.0))
+                terverifikasi=terverifikasi, alasan=alasan, tambahan_va=tambahan)
 
 
 def log_aksi(df):
