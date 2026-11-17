@@ -216,6 +216,19 @@ def main():
         perlu(not hilang, "nama tidak ditemukan: " + ", ".join(hilang))
         return f"{len(halaman)} halaman, semua impor ditemukan"
 
+    @langkah("13. Kendali berbasis NILM, loop tertutup 1 jam (sim/simulasi_nilm_kendali.py)")
+    def _():
+        sys.path.insert(0, str(AKAR / "sim"))
+        import simulasi_nilm_kendali as sk
+        h = sk.jalankan(jam=1, seed_uji=(9,), tampil=lambda *_: None).set_index("skenario")
+        perlu(h.loc["tanpa", "mcb_turun"] >= 1, "skenario uji harus membuat MCB turun bila tanpa kendali")
+        for nama in ("termal_1", "nilm_1", "nilm_2"):
+            perlu(h.loc[nama, "mcb_turun"] == 0, f"{nama}: MCB turun {h.loc[nama, 'mcb_turun']} kali")
+            perlu(h.loc[nama, "aksi_pindah"] >= 1, f"{nama}: tidak pernah memindah alat")
+        perlu(h.loc["nilm_1", "aksi_pindah"] <= h.loc["termal_1", "aksi_pindah"] + 2, "NILM terlalu sering memindah")
+        return (f"MCB turun: tanpa kendali {h.loc['tanpa', 'mcb_turun']}x, termal {h.loc['termal_1', 'mcb_turun']}x, "
+                f"NILM {h.loc['nilm_1', 'mcb_turun']}x (simulasi)")
+
     n_gagal = sum(1 for h in hasil if h[1] == "GAGAL")
     print(f"\n{sum(1 for h in hasil if h[1] == 'LULUS')} lulus, {n_gagal} gagal, "
           f"{sum(1 for h in hasil if h[1] == 'DILEWATI')} dilewati, {sum(h[3] for h in hasil):.0f} detik.")

@@ -32,21 +32,28 @@ def jadwal(rng, n, lama, jeda):
     return s
 
 
-def buat(jam=6, seed=1):
+def buat(jam=6, seed=1, komponen=False):
+    """komponen=True: kembalikan juga kontribusi daya tiap alat (dan beban siaga) sebagai dict nama -> (P, Q),
+    dipakai simulasi loop tertutup (sim/simulasi_nilm_kendali.py). Keluaran default tidak berubah."""
     rng = np.random.default_rng(seed)
     n = int(jam * 3600)
     waktu = pd.Timestamp("2026-11-01 08:00:00") + pd.to_timedelta(np.arange(n), unit="s")
     v = 220 + 3 * np.sin(np.arange(n) / 3000) + rng.normal(0, 0.8, n)
     P = np.zeros(n); Q = np.zeros(n)
-    status = {}
+    status, komp = {}, {}
     for nama, (p, q, lama, jeda) in ALAT.items():
         s = jadwal(rng, n, lama, jeda)
         status[nama] = s
         skala = (v / 220.0) ** 2                       # beban resistif mengikuti V^2 (pendekatan)
-        P += s * p * skala * (1 + rng.normal(0, 0.01, n))
-        Q += s * q * skala * (1 + rng.normal(0, 0.02, n))
-    P += 15 + rng.normal(0, 3, n)                       # beban siaga + derau
-    Q += 10 + rng.normal(0, 3, n)
+        dp = s * p * skala * (1 + rng.normal(0, 0.01, n))
+        dq = s * q * skala * (1 + rng.normal(0, 0.02, n))
+        P += dp
+        Q += dq
+        komp[nama] = (dp, dq)
+    sp, sq = 15 + rng.normal(0, 3, n), 10 + rng.normal(0, 3, n)
+    P += sp                                             # beban siaga + derau
+    Q += sq
+    komp["_siaga"] = (sp, sq)
     S = np.sqrt(P**2 + Q**2)
     df = pd.DataFrame({
         "waktu": waktu, "id_perangkat": "sintetis", "tegangan": v.round(1),
@@ -59,7 +66,8 @@ def buat(jam=6, seed=1):
         d = np.diff(s.astype(int))
         for i in np.where(d != 0)[0]:
             ev.append({"waktu": waktu[i + 1], "alat": nama, "arah": "nyala" if d[i] > 0 else "mati"})
-    return df, pd.DataFrame(ev).sort_values("waktu")
+    ev = pd.DataFrame(ev).sort_values("waktu")
+    return (df, ev, komp) if komponen else (df, ev)
 
 
 if __name__ == "__main__":

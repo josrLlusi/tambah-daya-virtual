@@ -38,6 +38,8 @@ import latih_klasifikasi as lk  # noqa: E402
 import logika as lg  # noqa: E402
 import perekam_serial as ps  # noqa: E402
 import data_sintetis as ds  # noqa: E402
+import keputusan_kendali as kk  # noqa: E402
+import pengendali_nilm as pn  # noqa: E402
 
 hasil = []   # (kelompok, nama, status, keterangan)
 kelompok_kini = ""
@@ -596,6 +598,162 @@ def main():
         d, ev = ds.buat(jam=0.2, seed=1)
         perlu({"waktu", "daya_aktif", "daya_reaktif", "arus", "alat_aktif"} <= set(d.columns))
         perlu(len(d) == 720 and d["daya_aktif"].min() >= 0, f"{len(d)} baris, min {d['daya_aktif'].min()}")
+
+    # -----------------------------------------------------------------------
+    kelompok("Keputusan kendali dari NILM (analisis/keputusan_kendali.py, pengendali_nilm.py)")
+
+    def cfg_(**lain):
+        dasar = dict(in_mcb=10.0, tau=900.0, theta_trip=1.45, kapasitas_inverter_va=2500.0,
+                     kanal={"setrika_uap": 1, "oven_listrik": 2})
+        return kk.Konfigurasi(**{**dasar, **lain})
+
+    def keadaan_(p, q=0.0, theta=0.5, aktif=None, **lain):
+        return kk.Keadaan(theta=theta, p=p, q=q, aktif=aktif or {}, **lain)
+
+    @cek("Konfigurasi menolak kompresor (freezer, kulkas, ac) di kanal pindah, dan parameter tak masuk akal")
+    def _():
+        for alat in ("freezer", "kulkas", "ac"):
+            try:
+                cfg_(kanal={alat: 1})
+            except ValueError as e:
+                perlu("kompresor" in str(e), str(e))
+            else:
+                raise AssertionError(f"{alat} seharusnya ditolak")
+        for salah in (dict(in_mcb=0), dict(tau=-1), dict(theta_trip=1.0), dict(margin=0.0), dict(margin=1.0)):
+            try:
+                cfg_(**salah)
+            except ValueError:
+                continue
+            raise AssertionError(f"{salah} seharusnya ditolak")
+
+    @cek("waktu_ke_ambang: sudah lewat = 0; tunak di bawah ambang = tak hingga; makin besar beban makin cepat")
+    def _():
+        perlu(kk.waktu_ke_ambang(1.3, 3.0, 1.16, 900) == 0.0)
+        perlu(math.isinf(kk.waktu_ke_ambang(0.5, 1.0, 1.16, 900)) and math.isinf(kk.waktu_ke_ambang(0.5, 1.16, 1.16, 900)))
+        t = [kk.waktu_ke_ambang(0.5, s_, 1.16, 900) for s_ in (1.3, 2.0, 4.0)]
+        perlu(all(np.diff(t) < 0) and t[-1] > 0, str(t))
+
+    @cek("keputusan: beban aman (arus jauh di bawah batas) -> tunggu; tidak memindahkan apa pun")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=1200, aktif={"setrika_uap": (1000.0, 20.0)}))
+        perlu(k.aksi == "tunggu", f"{k}")
+
+    @cek("keputusan: beban lebih -> pindah alat berkanal yang PALING banyak meredam; alat tanpa kanal tidak pernah dipilih")
+    def _():
+        aktif = {"setrika_uap": (2000.0, 40.0), "oven_listrik": (1500.0, 30.0), "mixer": (2400.0, 300.0)}
+        k = kk.keputusan(cfg_(), keadaan_(p=5900, q=370, theta=1.0, aktif=aktif))
+        perlu(k.aksi == "pindah" and k.alat == "setrika_uap", f"{k}")
+        perlu(k.s_setelah < kk.pemanasan_tunak(kk.arus(5900, 370, 220), 10.0))
+
+    @cek("keputusan: pindah belum cukup -> tetap pindah, ditandai cukup=False")
+    def _():
+        k = kk.keputusan(cfg_(kanal={"oven_listrik": 1}),
+                         keadaan_(p=5900, q=370, theta=1.0, aktif={"oven_listrik": (1500.0, 30.0)}))
+        perlu(k.aksi == "pindah" and k.cukup is False, f"{k}")
+
+    @cek("keputusan: alat yang melebihi kapasitas inverter dilewati; bila tak ada yang muat -> peringatan, bukan error")
+    def _():
+        k = kk.keputusan(cfg_(kapasitas_inverter_va=1000.0, kanal={"setrika_uap": 1}),
+                         keadaan_(p=5900, q=370, theta=0.5, aktif={"setrika_uap": (2000.0, 40.0)}))
+        perlu(k.aksi == "peringatan", f"{k}")
+
+    @cek("keputusan: alat yang sudah di baterai tidak dipindah dua kali")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=4000, q=100, theta=1.0, aktif={"setrika_uap": (2000.0, 40.0)},
+                                          dibaterai={"setrika_uap": (2000.0, 40.0)},
+                                          detik_di_baterai={"setrika_uap": 30.0}))
+        perlu(k.aksi != "pindah" or k.alat != "setrika_uap", f"{k}")
+
+    @cek("keputusan: NILM tidak konsisten dengan ukuran (alat dikira 2000 W padahal total 300 W) -> bukan kandidat")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=300, q=50, theta=1.5, aktif={"setrika_uap": (2000.0, 40.0)}))
+        perlu(not (k.aksi == "pindah" and k.cukup), f"{k}")
+
+    @cek("jaring pengaman: pemanasan melewati ambang aman tetapi NILM tak menemukan kandidat -> pindah alat di kanal bebas (DARURAT)")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=5900, q=370, theta=1.3, aktif={},
+                                          tipikal={"setrika_uap": (2035.0, 43.0), "oven_listrik": (1551.0, 29.0)}))
+        perlu(k.aksi == "pindah" and k.alat == "setrika_uap" and "DARURAT" in k.alasan, f"{k}")
+
+    @cek("jaring pengaman hanya bila pemanasan SUDAH melewati ambang aman; sebelum itu cukup peringatan")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=5900, q=370, theta=0.9, aktif={},
+                                          tipikal={"setrika_uap": (2035.0, 43.0)}))
+        perlu(k.aksi == "peringatan", f"{k}")
+
+    @cek("keputusan: jeda minimal antar aksi pelindung dihormati walau berbahaya")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=5900, q=370, theta=1.0, aktif={"setrika_uap": (2000.0, 40.0)},
+                                          detik_sejak_lindung=3.0))
+        perlu(k.aksi == "tunggu", f"{k}")
+
+    @cek("kembali ke PLN: butuh pemanasan rendah + cukup lama di baterai + beban dengan alat itu masih aman")
+    def _():
+        c = cfg_()
+        dasar = dict(p=300, q=50, theta=0.4, dibaterai={"setrika_uap": (2000.0, 40.0)})
+        perlu(kk.keputusan(c, keadaan_(**dasar, detik_di_baterai={"setrika_uap": 60.0})).aksi == "tunggu", "terlalu cepat kembali")
+        perlu(kk.keputusan(c, keadaan_(**{**dasar, "theta": 1.2}, detik_di_baterai={"setrika_uap": 600.0})).aksi == "tunggu",
+              "kembali padahal pemanasan masih tinggi")
+        k = kk.keputusan(c, keadaan_(**dasar, detik_di_baterai={"setrika_uap": 600.0}))
+        perlu(k.aksi == "kembali" and k.alat == "setrika_uap", f"{k}")
+        k = kk.keputusan(c, keadaan_(**{**dasar, "p": 1800, "q": 40}, detik_di_baterai={"setrika_uap": 600.0}))
+        perlu(k.aksi == "tunggu" and "ditahan" in k.alasan, f"bolak-balik tidak dicegah: {k}")
+
+    @cek("setelah alat dipindah, pemanasan masih di atas ambang tetapi beban sudah ringan (pemanasan menurun) -> tidak memindah alat lain")
+    def _():
+        c = cfg_()
+        perlu(c.ambang < 1.3, "asumsi tes: ambang aman di bawah 1,3")
+        k = kk.keputusan(c, keadaan_(p=1500, q=100, theta=1.3, aktif={"oven_listrik": (1400.0, 30.0)},
+                                     dibaterai={"setrika_uap": (2000.0, 40.0)}, detik_di_baterai={"setrika_uap": 20.0},
+                                     detik_sejak_lindung=20.0))
+        perlu(k.aksi == "tunggu", f"memindah/memperingatkan padahal beban sudah ringan: {k}")
+
+    @cek("pemanasan di atas ambang DAN beban tunak masih di atas ambang -> tetap bertindak")
+    def _():
+        k = kk.keputusan(cfg_(), keadaan_(p=4500, q=100, theta=1.3, aktif={"setrika_uap": (2000.0, 40.0)}))
+        perlu(k.aksi == "pindah" and k.alat == "setrika_uap", f"{k}")
+
+    @cek("PelacakStatus: alat terlarang (sedang di baterai) tidak dinyalakan oleh koreksi keseimbangan daya")
+    def _():
+        for terlarang, harapan in ((set(), {"a"}), ({"a"}, set())):
+            pel = dg.PelacakStatus(paket_sederhana())
+            pel.terlarang = set(terlarang)
+            pel.langkah(30, None, median_p=100.0 + 510.0, dasar=100.0)
+            perlu(pel.aktif == harapan, f"terlarang={terlarang}: aktif={pel.aktif}")
+
+    @cek("PengendaliNILM: beban konstan yang aman tidak menimbulkan aksi atau error")
+    def _():
+        peng = pn.PengendaliNILM(paket_sederhana(), cfg_(kanal={"b": 1}, in_mcb=20.0))
+        for t in range(300):
+            perlu(peng.langkah(float(t), 100.0, 20.0, 220.0) == [], f"aksi tak semestinya di t={t}")
+        perlu(len(peng.riwayat) == 0)
+
+    @cek("PengendaliNILM: beban lebih -> alat dikenali lalu dipindah; tidak kembali selagi sendirian saja sudah melebihi batas")
+    def _():
+        cfg = cfg_(kanal={"b": 1}, in_mcb=4.0, tau=300.0, kapasitas_inverter_va=2500.0)
+        peng = pn.PengendaliNILM(paket_sederhana(), cfg)
+        dipindah, aksi = False, []
+        for t in range(900):
+            p_b = 1975.0 if t >= 60 and not dipindah else 0.0
+            for k in peng.langkah(float(t), 100.0 + p_b, 20.0 + (43.0 if p_b else 0.0), 220.0):
+                aksi.append((t, k.aksi, k.alat))
+                if k.aksi == "pindah":
+                    dipindah = True
+                elif k.aksi == "kembali":
+                    dipindah = False
+        pindahan = [a for a in aksi if a[1] == "pindah"]
+        perlu(len(pindahan) == 1 and pindahan[0][2] == "b", f"aksi: {aksi}")
+        perlu(60 < pindahan[0][0] < 200, f"pindah pada t={pindahan[0][0]} detik")
+        perlu(not any(a[1] == "kembali" for a in aksi), f"alat kembali padahal sendirian saja melebihi batas: {aksi}")
+
+    @cek("PengendaliNILM.reset: mengosongkan status, pemanasan, dan riwayat")
+    def _():
+        peng = pn.PengendaliNILM(paket_sederhana(), cfg_(kanal={"b": 1}, in_mcb=4.0, tau=300.0))
+        for t in range(200):
+            peng.langkah(float(t), 100.0 + (1975.0 if t >= 20 else 0.0), 20.0, 220.0)
+        perlu(peng.theta > 0.5 and len(peng.riwayat) > 0)
+        peng.reset()
+        perlu(peng.theta == 0.0 and peng.n == 0 and not peng.riwayat and not peng.dibaterai and not peng.pelacak.aktif)
 
     # ---------------------------------------------------------------------
     n = {s: sum(1 for h in hasil if h[2] == s) for s in ("LULUS", "GAGAL", "CELAH")}

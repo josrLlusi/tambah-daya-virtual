@@ -27,6 +27,7 @@ Pembeda dari produk smart panel di luar negeri: satu sensor di panel yang sudah 
 | `firmware/uji_relay/` | sketsa uji kering relay, dijalankan tanpa 220 V |
 | `firmware/uji_host/` | uji logika firmware di komputer (butuh g++) |
 | `uji_semua.py` | menguji seluruh alur dengan satu perintah |
+| `uji_kasus_tepi.py` | uji kasus tepi (data kosong/pendek, nilai ekstrem, aturan keputusan kendali) |
 | `alat/` | perekam serial ESP32 ke CSV |
 | `analisis/` | deteksi event, klasifikasi alat, disagregasi, model MCB, dataset publik, data sintetis |
 | `dashboard/` | dasbor Streamlit: halaman utama, `simulator.py`, `tampilan.py`, `logika.py` (fungsi hitung), `pages/` (halaman rekaman) |
@@ -50,10 +51,17 @@ streamlit run dashboard/app.py       # membuka dasbor
 python uji_semua.py
 ```
 
-Perintah ini menjalankan dua belas langkah (simulasi, data sintetis, deteksi event, klasifikasi, disagregasi,
-model MCB, perekam mode uji, fungsi dasbor, logika firmware, kecocokan antar-halaman dasbor) dan mencetak LULUS atau GAGAL per langkah.
+Perintah ini menjalankan tiga belas langkah (simulasi, data sintetis, deteksi event, klasifikasi, disagregasi,
+model MCB, perekam mode uji, fungsi dasbor, logika firmware, kecocokan antar-halaman dasbor, kendali berbasis NILM) dan mencetak LULUS atau GAGAL per langkah.
 Berkas di repositori tidak diubah. Langkah logika firmware dilewati bila `g++` tidak terpasang.
 Semua datanya sintetis: uji ini membuktikan kode berjalan, bukan kinerja alat.
+
+```bash
+python uji_kasus_tepi.py        # kasus tepi: data kosong/pendek, NaN, baris serial rusak, aturan keputusan kendali
+```
+
+Uji kasus tepi memanggil fungsi langsung (sekitar 2 detik). Kekurangan yang sudah diketahui tetapi belum diperbaiki
+ditandai `CELAH` (tidak membuat uji gagal; pakai `--ketat` bila ingin menganggapnya gagal).
 
 ## Dasbor
 
@@ -116,11 +124,61 @@ Pola berkas seperti `data/raw/setrika_uap_*.csv` diperluas oleh skrip sendiri, s
 berjalan sama di PowerShell, CMD, dan terminal Linux/Mac. Rekaman ESP32 yang berisi beberapa baris per detik
 dirata-rata menjadi satu baris per detik sebelum dianalisis.
 
+## Kendali berbasis NILM (baru disimulasikan)
+
+Kendali di firmware (`esp32_panel.ino`) hanya memakai model termal MCB dan memindahkan alat yang terpasang di relay,
+tanpa tahu alat itu sedang menyala atau tidak. Hasil NILM kini bisa dipakai untuk memutuskan **alat mana** yang
+dipindah dan **kapan aman** dikembalikan:
+
+| Berkas | Isi |
+|---|---|
+| `analisis/keputusan_kendali.py` | aturan keputusan (fungsi murni, mudah diuji): pindah, kembali, peringatan, atau tunggu |
+| `analisis/pengendali_nilm.py` | pengendali online, 1 sampel per detik: deteksi event, klasifikasi, pelacakan status, lalu keputusan |
+| `sim/simulasi_nilm_kendali.py` | simulasi loop tertutup yang membandingkan strategi pada beban yang sama |
+
+Aturan intinya:
+1. Hanya alat yang **menurut NILM sedang menyala** dan terpasang di kanal relay yang dipertimbangkan; yang dipilih
+   adalah yang paling banyak meredam beban, dengan memperhitungkan kapasitas inverter.
+2. Alat dikembalikan ke PLN hanya bila pemanasan MCB sudah turun, alat cukup lama di baterai, **dan** daya alat itu
+   (dari NILM) tidak membuat beban melewati batas lagi. Ini mencegah bolak-balik pindah.
+3. **Jaring pengaman:** bila NILM tidak menemukan kandidat padahal pemanasan sudah melewati ambang aman, perilakunya
+   sama dengan kendali termal. NILM yang keliru tidak boleh lebih buruk daripada firmware sekarang.
+4. Kompresor (freezer, kulkas, AC) ditolak di tingkat konfigurasi: tidak boleh dipasang pada kanal pindah.
+
+```bash
+python sim/simulasi_nilm_kendali.py                  # 3 data uji x 6 jam, sekitar 2,5 menit
+python sim/simulasi_nilm_kendali.py --salah-tau 0.6  # MCB sebenarnya lebih cepat panas dari tebakan
+```
+
+Hasil **simulasi** (data sintetis, parameter ilustratif: MCB 10 A, tau 900 s, ambang trip 1,45, inverter 2500 VA;
+jumlah dari 3 data uji masing-masing 6 jam; model NILM dilatih pada data lain):
+
+| Skenario | MCB turun | Aksi pindah | Menit di baterai | Energi ke baterai (kWh) |
+|---|---|---|---|---|
+| tanpa kendali | 37 | 0 | 0 | 0 |
+| termal saja, 1 kanal (seperti firmware) | 0 | 29 | 226 | 4,9 |
+| NILM, 1 kanal | 0 | 17 | 387 | 7,1 |
+| NILM, 2 kanal (setrika dan oven) | 0 | 20 | 373 | 6,6 |
+| *bila tau sebenarnya 0,6x tebakan:* tanpa kendali / termal / NILM 1 kanal / NILM 2 kanal | 48 / 26 / 0 / 0 | | | |
+
+Cara membacanya, dengan jujur:
+- Bila parameter MCB diketahui benar, kendali termal saja **sudah mencegah MCB turun** pada skenario ini. NILM tidak
+  menambah pencegahan, tetapi memindah **lebih jarang** (17 berbanding 29) karena tidak bolak-balik.
+- Harganya: alat bertahan di baterai lebih lama, sehingga energi baterai yang dibutuhkan sekitar 43% lebih besar.
+  Ukuran baterai dan inverter harus mengikuti angka ini.
+- Bila MCB asli lebih cepat panas daripada tebakan, kendali termal saja gagal (26 kali turun), sedangkan NILM tidak
+  (0). Penyebabnya belum dipisahkan: kemungkinan karena bertindak lebih awal dan menahan alat di baterai lebih
+  lama. Ini alasan lain parameter MCB harus diukur (`analisis/fit_mcb.py`).
+- Dua kanal tidak lebih baik daripada satu pada skenario ini. Satu kali NILM memindah alat yang ternyata sedang mati.
+- Batas: satu keluarga skenario sintetis; model NILM dilatih pada generator yang sama dengan data ujinya (hasil
+  pada alat UMKM nyata hampir pasti lebih buruk); parameter semuanya ilustratif. **Belum ada di firmware.**
+
 ## Batas simulasi
 
 - Aturan kendali pada simulasi sangat sederhana dan hanya untuk menguji alur. Logika di firmware dan model NILM harus dikembangkan dan diuji terpisah.
 - Parameter model termal MCB (konstanta waktu, ambang) adalah tebakan ilustratif. Ganti dengan nilai dari datasheet dan uji waktu trip MCB yang dipakai.
 - Kolom `alat_aktif` pada data simulasi adalah label skenario, bukan keluaran model NILM.
+- Simulasi kendali NILM memakai model yang dilatih pada generator data sintetis yang sama dengan data ujinya, jadi akurasinya optimistik.
 
 ## Yang harus dikerjakan berikutnya
 
@@ -132,7 +190,11 @@ dirata-rata menjadi satu baris per detik sebelum dianalisis.
 - [ ] Rekam kombinasi alat dan uji `analisis/disagregasi.py`
 - [ ] Uji kendali: relay dan sakelar pindah dengan inverter dan baterai
 - [ ] Ukur: jumlah MCB turun sebelum dan sesudah kendali; akurasi pengenalan alat
-- [ ] Sambungkan hasil pengenalan alat ke keputusan kendali (saat ini kendali hanya memakai model termal)
+- [x] Sambungkan hasil pengenalan alat ke keputusan kendali: **sudah di perangkat lunak dan simulasi**
+      (`analisis/pengendali_nilm.py`), belum di perangkat keras
+- [ ] Jalankan kendali NILM pada perangkat: firmware tidak bisa menjalankan scikit-learn. Pilihan: komputer/Raspberry Pi
+      menjalankan pengendali dan mengirim perintah ke ESP32 lewat serial (firmware perlu perintah pindah/kembali dan
+      watchdog yang mengembalikan alat ke PLN bila perintah berhenti), atau pohon keputusan diekspor ke C
 - [ ] Pantau tegangan aki di firmware
 - [ ] Hubungkan firmware ke basis data (opsional; dasbor sudah bisa membaca rekaman di `data/raw`)
 

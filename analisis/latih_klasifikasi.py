@@ -110,9 +110,11 @@ def main():
               f"{terbaik} (validasi silang {fold}-fold)")
 
     model = model_model()[terbaik].fit(X, y)
-    joblib.dump({"fitur": list(X.columns), "model": model, "kelas": kelas,
-                 "dP_tipikal": ev.assign(a=ev["dP"].abs()).groupby("alat")["a"].median().to_dict()},
-                out / "model.joblib")
+    paket = {"fitur": list(X.columns), "model": model, "kelas": kelas,
+             "dP_tipikal": ev.assign(a=ev["dP"].abs()).groupby("alat")["a"].median().to_dict()}
+    if "dQ" in ev and ev["dQ"].notna().all():      # dipakai analisis/keputusan_kendali.py untuk menghitung arus alat
+        paket["dQ_tipikal"] = ev.assign(a=ev["dQ"].abs()).groupby("alat")["a"].median().to_dict()
+    joblib.dump(paket, out / "model.joblib")
     baris = ["# Laporan klasifikasi alat\n", f"- Event: {len(ev)}; alat: {len(kelas)}; fold: {fold}",
              f"- Fitur: {', '.join(X.columns)}", f"- Event per alat: {jumlah.to_dict()}\n",
              "| Model | Akurasi (%) | F1 makro (%) |", "|---|---|---|"]

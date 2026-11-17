@@ -21,11 +21,60 @@ from deteksi_event import deteksi, muat  # noqa: E402
 from latih_klasifikasi import fitur  # noqa: E402
 
 
-def lacak(df, ev, paket, periode_koreksi=30, ambang_relatif=0.6):
-    """Pelacakan status berbasis event + koreksi keseimbangan daya.
+class PelacakStatus:
+    """Pelacakan status alat berbasis event + koreksi keseimbangan daya, satu sampel per panggilan.
+    Dipakai bersama oleh `lacak` (batch, seluruh rekaman) dan analisis/pengendali_nilm.py (online, per detik),
+    sehingga keduanya memakai aturan yang persis sama.
+
     Koreksi: setiap `periode_koreksi` sampel, bandingkan daya terukur dengan jumlah daya tipikal alat yang
     dianggap menyala. Selisih besar berarti ada event yang terlewat -> nyalakan/matikan alat yang paling cocok."""
-    model, kelas, tipikal = paket["model"], paket["kelas"], paket["dP_tipikal"]
+
+    def __init__(self, paket, periode_koreksi=30, ambang_relatif=0.6):
+        self.kelas, self.tipikal = list(paket["kelas"]), paket["dP_tipikal"]
+        self.periode_koreksi, self.ambang_relatif = periode_koreksi, ambang_relatif
+        self.aktif = set()
+        self.ukur = {}      # alat -> (|dP|, |dQ|) terukur pada event 'nyala' terakhir; dasar perkiraan daya alat
+        self.terlarang = set()   # alat yang tidak boleh dinyalakan oleh koreksi (mis. sedang dipindah ke baterai)
+
+    def perlu_koreksi(self, j):
+        return j % self.periode_koreksi == 0 and j >= 10
+
+    def langkah(self, j, e, median_p=None, dasar=0.0):
+        """e: baris event (dengan alat_pred) pada sampel j, atau None. median_p: median 11 sampel daya aktif
+        yang berakhir di j (hanya diperlukan bila e None dan perlu_koreksi(j)). dasar: beban siaga."""
+        tipikal, aktif, kelas = self.tipikal, self.aktif, self.kelas
+        if e is not None:
+            if e["arah"] == "nyala":
+                aktif.add(e["alat_pred"])
+                dq = float(e["dQ"]) if "dQ" in e and pd.notna(e["dQ"]) else 0.0
+                self.ukur[e["alat_pred"]] = (abs(float(e["dP"])), abs(dq))
+            elif aktif:
+                kand = e["alat_pred"] if e["alat_pred"] in aktif else min(
+                    aktif, key=lambda k: abs(tipikal.get(k, 0) - abs(e["dP"])))
+                aktif.discard(kand)
+        elif median_p is not None:
+            sisa = float(median_p) - dasar - sum(tipikal.get(k, 0) for k in aktif)
+            if sisa < 0 and aktif:
+                k = min(aktif, key=lambda k: abs(tipikal.get(k, 0) + sisa))
+                if -sisa > self.ambang_relatif * tipikal.get(k, 0):
+                    aktif.discard(k)
+            elif sisa > 0:
+                mati = [k for k in kelas if k not in aktif and k not in self.terlarang]
+                if mati:
+                    k = min(mati, key=lambda k: abs(tipikal.get(k, 0) - sisa))
+                    if sisa > self.ambang_relatif * tipikal.get(k, 0) and abs(tipikal.get(k, 0) - sisa) < 0.4 * tipikal.get(k, 0):
+                        aktif.add(k)
+                    else:
+                        # tidak ada satu alat yang pas: mungkin beberapa alat kecil terlewat. Nyalakan alat
+                        # terbesar yang masih muat di selisih daya; sisanya dikoreksi pada putaran berikutnya.
+                        muat_ = [k for k in mati if 0 < tipikal.get(k, 0) <= 1.15 * sisa]
+                        if muat_:
+                            aktif.add(max(muat_, key=lambda k: tipikal.get(k, 0)))
+
+
+def lacak(df, ev, paket, periode_koreksi=30, ambang_relatif=0.6):
+    """Pelacakan status seluruh rekaman (batch) dengan PelacakStatus."""
+    model, kelas = paket["model"], paket["kelas"]
     ev = ev.copy()
     if len(ev):
         ev["alat_pred"] = model.predict(fitur(ev)[paket["fitur"]])
@@ -38,35 +87,12 @@ def lacak(df, ev, paket, periode_koreksi=30, ambang_relatif=0.6):
     dasar = float(pd.Series(P).rolling(11, center=True, min_periods=1).median().min())
     n = len(df)
     status = {k: np.zeros(n, dtype=bool) for k in kelas}
-    aktif = set()
+    pelacak = PelacakStatus(paket, periode_koreksi, ambang_relatif)
     for j in range(n):
         e = per_indeks.get(j)
-        if e is not None:
-            if e["arah"] == "nyala":
-                aktif.add(e["alat_pred"])
-            elif aktif:
-                kand = e["alat_pred"] if e["alat_pred"] in aktif else min(
-                    aktif, key=lambda k: abs(tipikal.get(k, 0) - abs(e["dP"])))
-                aktif.discard(kand)
-        elif j % periode_koreksi == 0 and j >= 10:
-            sisa = float(np.median(P[j - 10:j + 1])) - dasar - sum(tipikal.get(k, 0) for k in aktif)
-            if sisa < 0 and aktif:
-                k = min(aktif, key=lambda k: abs(tipikal.get(k, 0) + sisa))
-                if -sisa > ambang_relatif * tipikal.get(k, 0):
-                    aktif.discard(k)
-            elif sisa > 0:
-                mati = [k for k in kelas if k not in aktif]
-                if mati:
-                    k = min(mati, key=lambda k: abs(tipikal.get(k, 0) - sisa))
-                    if sisa > ambang_relatif * tipikal.get(k, 0) and abs(tipikal.get(k, 0) - sisa) < 0.4 * tipikal.get(k, 0):
-                        aktif.add(k)
-                    else:
-                        # tidak ada satu alat yang pas: mungkin beberapa alat kecil terlewat. Nyalakan alat
-                        # terbesar yang masih muat di selisih daya; sisanya dikoreksi pada putaran berikutnya.
-                        muat_ = [k for k in mati if 0 < tipikal.get(k, 0) <= 1.15 * sisa]
-                        if muat_:
-                            aktif.add(max(muat_, key=lambda k: tipikal.get(k, 0)))
-        for k in aktif:
+        m = float(np.median(P[j - 10:j + 1])) if (e is None and pelacak.perlu_koreksi(j)) else None
+        pelacak.langkah(j, e, m, dasar)
+        for k in pelacak.aktif:
             status[k][j] = True
     return ev, status
 
