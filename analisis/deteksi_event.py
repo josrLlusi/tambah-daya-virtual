@@ -61,11 +61,21 @@ def muat(paths):
 def deteksi(df, ambang=AMBANG_W, jendela=JENDELA, jarak_min=JARAK_MIN, faktor_derau=6.0):
     """Event = perubahan daya yang (1) lebih besar dari ambang, (2) lebih besar dari faktor_derau x derau lokal,
     dan (3) bertahan: rata-rata 'sesudah' berbeda dari 'sebelum' pada jendela tunak di luar masa transisi."""
+    kolom = ["indeks", "waktu", "dP", "P_sebelum", "P_sesudah"]
+    if "daya_reaktif" in df:
+        kolom.append("dQ")
+    if "arus" in df:
+        kolom.append("rasio_puncak")
+    kolom.append("arah")
     P_asli = df["daya_aktif"].to_numpy(float)
+    n = len(P_asli)
+    lag = 3
+    if n <= 2 * (lag + jendela):
+        # terlalu pendek untuk membandingkan 'sebelum' dan 'sesudah' (termasuk data kosong):
+        # kembalikan tabel kosong BERKOLOM LENGKAP supaya kode berikutnya (fitur, disagregasi, CSV) tidak error
+        return pd.DataFrame(columns=kolom)
     P = median_filter(P_asli, size=7, mode="nearest")
     Q = median_filter(df["daya_reaktif"].to_numpy(float), size=7, mode="nearest") if "daya_reaktif" in df else None
-    n = len(P)
-    lag = 3
     d = np.zeros(n)
     d[lag:n - lag] = P[2 * lag:] - P[:n - 2 * lag]
     # derau lokal: deviasi absolut median dari selisih sampel berurutan (tahan terhadap event)
@@ -91,7 +101,7 @@ def deteksi(df, ambang=AMBANG_W, jendela=JENDELA, jarak_min=JARAK_MIN, faktor_de
             # rasio lonjakan arus saat start (berguna bila sampling cukup cepat untuk menangkapnya)
             e["rasio_puncak"] = a[j - 1:j + lag + 1].max() / max(a[j + lag + 1:j + lag + 1 + jendela].mean(), 1e-6)
         kandidat.append(e)
-    ev = pd.DataFrame(kandidat)
+    ev = pd.DataFrame(kandidat, columns=kolom)   # tanpa kandidat pun kolomnya lengkap
     if not ev.empty:
         ev["arah"] = np.where(ev["dP"] > 0, "nyala", "mati")
     return ev

@@ -35,7 +35,13 @@ def fit(I_rel, t_ukur, th0):
         tau, th = x
         return np.log(t_trip(I_rel, tau, th, th0)) - np.log(t_ukur)   # galat relatif (log)
     s_min = float(np.min(np.asarray(I_rel) ** 2))
-    r = least_squares(resid, x0=[np.median(t_ukur), min(1.2, 0.9 * s_min)],
+    if 0.999 * s_min <= 1.0:
+        raise SystemExit(
+            f"Arus uji terkecil ({float(np.min(I_rel)):.3f} x arus nominal) tidak lebih besar dari arus nominal. "
+            "Model termal ini mensyaratkan ambang trip >= 1 (x arus nominal^2), jadi uji trip harus memakai arus "
+            "di atas arus nominal (mis. 1,3 sampai 3 kali arus nominal). Periksa kolom arus_A dan --in-mcb.")
+    th_awal = min(1.2, 0.5 * (1.0 + 0.999 * s_min))   # tebakan awal harus di dalam batas (1,0 ; 0,999 s_min)
+    r = least_squares(resid, x0=[np.median(t_ukur), th_awal],
                       bounds=([1.0, 1.0], [1e5, 0.999 * s_min]))
     return r.x, r
 

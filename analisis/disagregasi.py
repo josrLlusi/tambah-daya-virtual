@@ -26,9 +26,11 @@ def lacak(df, ev, paket, periode_koreksi=30, ambang_relatif=0.6):
     Koreksi: setiap `periode_koreksi` sampel, bandingkan daya terukur dengan jumlah daya tipikal alat yang
     dianggap menyala. Selisih besar berarti ada event yang terlewat -> nyalakan/matikan alat yang paling cocok."""
     model, kelas, tipikal = paket["model"], paket["kelas"], paket["dP_tipikal"]
-    X = fitur(ev)[paket["fitur"]]
     ev = ev.copy()
-    ev["alat_pred"] = model.predict(X) if len(ev) else []
+    if len(ev):
+        ev["alat_pred"] = model.predict(fitur(ev)[paket["fitur"]])
+    else:
+        ev["alat_pred"] = pd.Series(dtype=object)   # rekaman tanpa event (mis. semua alat mati): tak ada yang diklasifikasi
     per_indeks = {int(e["indeks"]): e for _, e in ev.iterrows()}
     P = df["daya_aktif"].to_numpy(float)
     # beban siaga: level terendah yang bertahan (minimum dari median bergerak), bukan persentil,

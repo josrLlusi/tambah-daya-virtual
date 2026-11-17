@@ -15,6 +15,7 @@ Tekan Ctrl+C untuk berhenti.
 """
 import argparse
 import csv
+import math
 import random
 import time
 from datetime import datetime
@@ -49,9 +50,12 @@ def urai(baris, kolom):
     if len(nilai) != len(kolom):
         return None
     try:
-        return {k: float(v) for k, v in zip(kolom, nilai)}
+        data = {k: float(v) for k, v in zip(kolom, nilai)}
     except ValueError:
         return None
+    if not all(math.isfinite(v) for v in data.values()):
+        return None     # 'nan' dan 'inf' lolos float(); jangan sampai masuk CSV dan merusak analisis
+    return data
 
 
 def main():
